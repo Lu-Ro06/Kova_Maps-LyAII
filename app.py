@@ -1510,6 +1510,8 @@ def analisis_ruta():
                 if zona['nombre'] not in zonas_detectadas:
                     zonas_detectadas.append(zona['nombre'])
 
+
+
     # 3. Desniveles
     desnivel_acumulado = obtener_desnivel_acumulado(ruta)
 

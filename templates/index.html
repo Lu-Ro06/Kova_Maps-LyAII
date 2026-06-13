@@ -372,6 +372,7 @@
 
       <button onclick="calcularRutaCompleta()"><i class="bi bi-play-fill"></i> Iniciar Ruta</button>
       <button onclick="restaurarBuscador(true)"><i class="bi bi-trash"></i> Eliminar Ruta</button>
+      <button id="btnCambioRuta" class="btn-secundario" onclick="cambiarRuta()" style="display:none; margin-top: 5px;"><i class="bi bi-shuffle"></i> Cambio de Ruta</button>
       <button id="btnIndicaciones" class="btn-secundario" onclick="mostrarIndicaciones()" style="display:none; margin-top: 5px;"><i class="bi bi-list-ul"></i> Ver Indicaciones</button>
     </div>
   </div>
@@ -462,6 +463,22 @@
     let marcadores = [];
 
     let marcadoresCasetas = []; 
+    let rutasEncontradas = [];
+    let indiceRutaActual = 0;
+
+    window.cambiarRuta = function() {
+      if (rutasEncontradas.length > 1 && controlRuta) {
+        indiceRutaActual = (indiceRutaActual + 1) % rutasEncontradas.length;
+        if (typeof controlRuta._routeSelected === 'function') {
+            controlRuta._routeSelected(rutasEncontradas[indiceRutaActual]);
+        } else {
+            // Fallback for visual update
+            controlRuta.fire('routeselected', {route: rutasEncontradas[indiceRutaActual]});
+            if (window.rutaFalsa) mapa.removeLayer(window.rutaFalsa);
+            window.rutaFalsa = L.polyline(rutasEncontradas[indiceRutaActual].coordinates, { color: '#448aff', opacity: 1, weight: 5 }).addTo(mapa);
+        }
+      }
+    };
 
     function mostrarIndicaciones() { document.getElementById('modalIndicaciones').classList.remove('d-none'); }
     function cerrarIndicaciones() { document.getElementById('modalIndicaciones').classList.add('d-none'); }
@@ -545,10 +562,18 @@
           waypoints: puntosIntermedios.map(p => p.latlng),
           routeWhileDragging: false,
           showAlternatives: true,
-          altLineOptions: { styles: [{color: 'white', opacity: 0.6, weight: 6}] },
+          altLineOptions: { styles: [{color: 'transparent', opacity: 0, weight: 0}] },
           router: L.Routing.osrmv1({ language: 'es' }),
           createMarker: () => null,
-          lineOptions: { styles: [{ color: '#448aff', opacity: 1, weight: 5 }] }
+          lineOptions: { styles: [{ color: '#448aff', opacity: 0.6, weight: 5 }] }
+        }).on('routesfound', function (e) {
+          rutasEncontradas = e.routes;
+          indiceRutaActual = 0;
+          if (rutasEncontradas.length > 1) {
+            document.getElementById('btnCambioRuta').style.display = 'block';
+          } else {
+            document.getElementById('btnCambioRuta').style.display = 'none';
+          }
         }).on('routeselected', function (e) {
           const resumen = e.route.summary;
           const distancia = resumen.totalDistance / 1000;
@@ -594,32 +619,7 @@
           document.getElementById('listaIndicaciones').innerHTML = htmlPasos;
           document.getElementById('btnIndicaciones').style.display = 'block';
           
-          // Simular Zonas de Tráfico (Líneas Rojas superpuestas estilo Waze)
-          let enTrafico = false;
-          let segmentoTrafico = [];
-          
-          coordsRutaCompleta.forEach((coord, i) => {
-              // Cada 20 puntos evaluamos si hay tráfico (basado determinísticamente en la coordenada)
-              if (i % 20 === 0) {
-                 let hash = Math.abs(Math.sin(coord.lat * coord.lng) * 10000);
-                 enTrafico = (hash - Math.floor(hash)) < 0.25; // 25% de probabilidad de que sea zona roja
-              }
-              
-              if (enTrafico) {
-                  segmentoTrafico.push(coord);
-              } else {
-                  if (segmentoTrafico.length > 0) {
-                      // Dibujar el tramo rojo superpuesto a la línea azul
-                      let pl = L.polyline(segmentoTrafico, {color: '#ef4444', weight: 6, opacity: 1.0}).addTo(mapa);
-                      marcadoresCasetas.push(pl); // Aprovechamos este arreglo para que se borren al reiniciar
-                      segmentoTrafico = [];
-                  }
-              }
-          });
-          if (segmentoTrafico.length > 0) {
-              let pl = L.polyline(segmentoTrafico, {color: '#ef4444', weight: 6, opacity: 1.0}).addTo(mapa);
-              marcadoresCasetas.push(pl);
-          }
+
           
           // Helper para crear cards
           const addCard = (id, iconClass, label, value, delay, extraClass='') => {
@@ -699,28 +699,37 @@
             const minOp = Math.round((tiempoOperador - horasOp) * 60);
             addCard('tiempo_operador', 'bi-person-workspace icon-op', 'Tiempo Operador (NOM-087)', `${horasOp}h ${minOp}m`, 0.5);
 
+            // Dibujar TODOS los círculos de las zonas críticas
+            const zonasInfo = data.zonas_criticas_info || [];
+            zonasInfo.forEach(info => {
+                let circulo = L.circle([info.lat, info.lon], {
+                    color: 'red',
+                    fillColor: '#f03',
+                    fillOpacity: 0.2,
+                    weight: 2,
+                    radius: info.radio_km * 1000
+                }).addTo(mapa);
+                circulo.bindPopup(`<b>Zona Crítica: ${info.nombre}</b><br>Radio: ${info.radio_km} km<br>Riesgo: ${info.riesgo}`);
+                marcadoresCasetas.push(circulo);
+            });
+
             if (zonas.length > 0) {
               addCard('zonas', 'bi-exclamation-triangle-fill icon-alert', 'Zonas Críticas (Riesgo)', zonas.join(', '), 0.6);
               
-              // Dibujar iconos de alerta para zonas detectadas
-              const zonasInfo = data.zonas_criticas_info || [];
               zonas.forEach(nombreZona => {
                  let info = zonasInfo.find(z => z.nombre === nombreZona);
                  if (info) {
                     let iconAlerta = L.icon({
                        iconUrl: 'https://cdn-icons-png.flaticon.com/512/564/564249.png', // Icono de Advertencia
                        iconSize: [30, 30],
-                        backgroundColor: ['#0ea5e9', '#10b981'],
                        popupAnchor: [0, -30]
                     });
                     let m = L.marker([info.lat, info.lon], {icon: iconAlerta}).addTo(mapa);
                     m.bindPopup(`<b>⚠️ Precaución</b><br>Ruta cruzando la zona de riesgo: ${info.nombre}`);
-                    marcadoresCasetas.push(m); // Reutilizamos este arreglo para limpiar todo después
+                    marcadoresCasetas.push(m);
                  }
               });
-            }
-
-            // 1. Costo de Desgaste (Llantas y Mantenimiento)
+            }            // 1. Costo de Desgaste (Llantas y Mantenimiento)
             let factorVehiculoDesgaste = cilindros === 4 ? 0.8 : (cilindros === 6 ? 1.5 : 3.5);
             let costoDesgaste = (distancia * factorVehiculoDesgaste) + (desnivel * 0.5);
             addCard('desgaste', 'bi-gear-fill icon-op', 'Desgaste y Mantenimiento', `$${costoDesgaste.toFixed(2)} MXN`, 0.65);
